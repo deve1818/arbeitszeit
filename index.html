@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Arbeitszeit</title>
+  <meta name="description" content="Arbeitszeit erfassen – offline, ohne Konto.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Arbeitszeit">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="app">
+    <section id="view-today" class="view active" aria-label="Heute"></section>
+    <section id="view-history" class="view" aria-label="Verlauf"></section>
+    <section id="view-settings" class="view" aria-label="Einstellungen"></section>
+  </main>
+
+  <nav class="tabbar" aria-label="Navigation">
+    <button class="tab active" data-view="today">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <span>Heute</span>
+    </button>
+    <button class="tab" data-view="history">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
+      <span>Verlauf</span>
+    </button>
+    <button class="tab" data-view="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      <span>Einstellungen</span>
+    </button>
+  </nav>
+
+  <!-- Eintrag bearbeiten -->
+  <dialog id="entry-dialog">
+    <form id="entry-form" method="dialog">
+      <header class="sheet-head">
+        <button type="button" class="link" data-close>Abbrechen</button>
+        <h2 id="entry-title">Eintrag</h2>
+        <button type="submit" class="link strong" value="save">Sichern</button>
+      </header>
+      <div class="group">
+        <label class="row"><span>Datum</span><input type="date" name="date" required></label>
+        <label class="row"><span>Beginn</span><input type="time" name="start" required></label>
+        <label class="row"><span>Ende</span><input type="time" name="end"></label>
+        <label class="row"><span>Pause (Min.)</span><input type="number" name="pause" min="0" step="1" inputmode="numeric"></label>
+      </div>
+      <div class="group">
+        <label class="row"><span>Notiz</span><input type="text" class="wide" name="note" maxlength="200" placeholder="optional"></label>
+      </div>
+      <p class="hint" id="entry-hint"></p>
+      <p class="error" id="entry-error" role="alert"></p>
+      <button type="button" class="btn danger-text full" id="entry-delete">Eintrag löschen</button>
+    </form>
+  </dialog>
+
+  <!-- Tag anzeigen -->
+  <dialog id="day-dialog">
+    <div class="sheet">
+      <header class="sheet-head">
+        <span></span>
+        <h2 id="day-title">Tag</h2>
+        <button type="button" class="link strong" data-close>Fertig</button>
+      </header>
+      <div id="day-body"></div>
+    </div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+
+  <script src="app.js"></script>
+</body>
+</html>
