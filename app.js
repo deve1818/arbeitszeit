@@ -2,7 +2,7 @@
 
 /* =========================================================
    Arbeitszeit – Web-App zur Zeiterfassung (offline, lokal)
-   Arbeitszeiten eintragen und pro Woche / Monat zusammenrechnen.
+   Ein Bildschirm: Stempeln, Woche/Monat mit Summe, Tagesliste.
    Alle Daten liegen nur im Speicher dieses Geräts (localStorage).
    ========================================================= */
 
@@ -11,6 +11,7 @@ const KEY = 'arbeitszeit.v1';
 const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 const WD_LONG = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+const MON_SHORT = ['Jan.', 'Feb.', 'März', 'Apr.', 'Mai', 'Juni', 'Juli', 'Aug.', 'Sep.', 'Okt.', 'Nov.', 'Dez.'];
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const pad = (n) => String(n).padStart(2, '0');
@@ -31,6 +32,8 @@ function fmtDur(min) {
 }
 // Minuten -> "7,75"
 const fmtDec = (min) => (Math.round(Math.max(0, min)) / 60).toFixed(2).replace('.', ',');
+// "7:45 h" als HTML mit kleiner Einheit
+const durHTML = (min) => `${fmtDur(min)}<small> h</small>`;
 
 function isoWeek(d) {
   const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -40,19 +43,29 @@ function isoWeek(d) {
   return Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
 }
 
+// Kurzer Zeitraum-Text, z. B. "16.–22. Nov." oder "30. Nov. – 6. Dez."
+function rangeText(s, e) {
+  if (s.getMonth() === e.getMonth()) return `${s.getDate()}.–${e.getDate()}. ${MON_SHORT[e.getMonth()]}`;
+  return `${s.getDate()}. ${MON_SHORT[s.getMonth()]} – ${e.getDate()}. ${MON_SHORT[e.getMonth()]}`;
+}
+
 // ---------- Datenhaltung ----------
+const DEFAULT_TIMES = { start: '08:00', end: '16:30', pause: 30 };
+
 function defaults() {
   return {
     version: 1,
     entries: [], // { id, start: ISO, end: ISO|null, pauseMin, breakStart: ISO|null, note }
-    settings: { lastBackup: null },
+    settings: { lastBackup: null, lastTimes: { ...DEFAULT_TIMES } },
   };
 }
 
 const validISO = (v) => typeof v === 'string' && !isNaN(Date.parse(v));
+const validHM = (v) => typeof v === 'string' && /^\d{2}:\d{2}$/.test(v);
 
 function normalize(s) {
   if (!s || typeof s !== 'object' || !Array.isArray(s.entries)) throw new Error('Keine gültigen Arbeitszeit-Daten');
+  const lt = s.settings?.lastTimes || {};
   return {
     version: 1,
     entries: s.entries.filter((e) => e && validISO(e.start)).map((e) => ({
@@ -63,7 +76,14 @@ function normalize(s) {
       breakStart: !e.end && validISO(e.breakStart) ? new Date(e.breakStart).toISOString() : null,
       note: String(e.note || '').slice(0, 200),
     })),
-    settings: { lastBackup: validISO(s.settings?.lastBackup) ? s.settings.lastBackup : null },
+    settings: {
+      lastBackup: validISO(s.settings?.lastBackup) ? s.settings.lastBackup : null,
+      lastTimes: {
+        start: validHM(lt.start) ? lt.start : DEFAULT_TIMES.start,
+        end: validHM(lt.end) ? lt.end : DEFAULT_TIMES.end,
+        pause: Number.isFinite(lt.pause) && lt.pause >= 0 ? lt.pause : DEFAULT_TIMES.pause,
+      },
+    },
   };
 }
 
@@ -105,6 +125,7 @@ function workMin(e, now = new Date()) {
   return Math.max(0, (end - new Date(e.start)) / 60000 - pauseOf(e, now));
 }
 
+// Einträge nach Tag (Tag des Beginns) gruppiert und sortiert
 function byDay() {
   const map = new Map();
   for (const e of state.entries) {
@@ -118,7 +139,6 @@ function byDay() {
 
 const dayTotal = (list, now) => (list || []).reduce((s, e) => s + workMin(e, now), 0);
 
-// Summe aller Einträge, deren Beginn im Zeitraum [from, to] (Tage, inklusive) liegt
 function rangeTotal(map, from, to, now) {
   let sum = 0;
   let days = 0;
@@ -129,11 +149,11 @@ function rangeTotal(map, from, to, now) {
   return { sum, days };
 }
 
-// ---------- Aktionen ----------
+// ---------- Stempeln ----------
 function clockIn() {
   if (running()) return;
   state.entries.push({ id: uid(), start: new Date().toISOString(), end: null, pauseMin: 0, breakStart: null, note: '' });
-  save(); renderToday(); toast('Eingestempelt');
+  save(); render(); toast('Eingestempelt');
 }
 
 function toggleBreak() {
@@ -143,12 +163,12 @@ function toggleBreak() {
   if (e.breakStart) {
     e.pauseMin = Math.round(pauseOf(e, now));
     e.breakStart = null;
-    toast('Pause beendet');
+    toast('Weiter geht’s');
   } else {
     e.breakStart = now.toISOString();
     toast('Pause gestartet');
   }
-  save(); renderToday();
+  save(); render();
 }
 
 function clockOut() {
@@ -158,239 +178,197 @@ function clockOut() {
   e.pauseMin = Math.round(pauseOf(e, now));
   e.breakStart = null;
   e.end = now.toISOString();
-  save(); renderToday();
-  toast(`Ausgestempelt · ${fmtDur(workMin(e))} Std. gearbeitet`);
+  save(); render();
+  toast(`Feierabend · ${fmtDur(workMin(e))} h gearbeitet`);
 }
 
-// ---------- Ansicht: Heute ----------
+// ---------- Hauptansicht ----------
+const view = { mode: 'week', offset: 0 };
 let renderedDay = null;
 
-function todayVM(now = new Date()) {
-  const map = byDay();
-  const k = keyOf(now);
-  const run = running();
-  const ws = startOfWeek(now);
-  const ms = new Date(now.getFullYear(), now.getMonth(), 1);
-  const me = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return {
-    now, k, map, run,
-    onBreak: !!(run && run.breakStart),
-    entries: map.get(k) || [],
-    today: dayTotal(map.get(k), now),
-    week: rangeTotal(map, ws, addDays(ws, 6), now).sum,
-    month: rangeTotal(map, ms, me, now).sum,
-  };
-}
-
-function renderToday() {
-  const vm = todayVM();
-  renderedDay = vm.k;
-  const { run, onBreak, now } = vm;
-
-  const actions = !run
-    ? `<button class="btn primary" data-act="in">Einstempeln</button>`
-    : `<button class="btn pause" data-act="break">${onBreak ? 'Pause beenden' : 'Pause'}</button>
-       <button class="btn stop" data-act="out">Ausstempeln</button>`;
-
-  const runOtherDay = run && keyOf(new Date(run.start)) !== vm.k;
-  const needsBackup = state.entries.length >= 5 &&
-    (!state.settings.lastBackup || (now - new Date(state.settings.lastBackup)) / 86400000 > 30);
-
-  $('#view-today').innerHTML = `
-    <h1>Heute</h1>
-    <p class="subtitle">${WD_LONG[now.getDay()]}, ${now.getDate()}. ${MONTHS[now.getMonth()]}</p>
-
-    <div class="clock-card">
-      <div class="big-time num" id="big-time"></div>
-      <div class="big-sub">Stunden heute</div>
-      <div class="status" id="status"></div>
-      <div class="actions">${actions}</div>
-    </div>
-
-    ${runOtherDay ? `<div class="banner"><p>Du bist seit ${WD[new Date(run.start).getDay()]}, ${hm(new Date(run.start))} eingestempelt. Vergessen auszustempeln? Tippe den Eintrag unten an, um ihn zu korrigieren.</p></div>` : ''}
-
-    <div class="stats">
-      <div class="stat"><div class="label">Diese Woche</div><div class="value num" id="st-week"></div><div class="note">KW ${isoWeek(now)}</div></div>
-      <div class="stat"><div class="label">Dieser Monat</div><div class="value num" id="st-month"></div><div class="note">${MONTHS[now.getMonth()]}</div></div>
-    </div>
-
-    ${needsBackup ? `<div class="banner"><p>Deine Daten liegen nur auf diesem iPhone. Sichere sie ab und zu als Backup.</p><button class="btn small" data-act="backup">Backup</button></div>` : ''}
-
-    <h3 class="section">Einträge heute</h3>
-    <div class="group">${vm.entries.map((e) => entryItem(e, now)).join('') || '<div class="empty">Noch keine Einträge</div>'}</div>
-    ${runOtherDay ? `<div class="group" style="margin-top:10px">${entryItem(run, now, true)}</div>` : ''}
-    <div style="margin-top:10px"><button class="btn plain full" data-act="add-today">+ Eintrag nachtragen</button></div>
-  `;
-  fillToday(vm);
-}
-
-function fillToday(vm) {
-  const { run, onBreak, now } = vm;
-  const view = $('#view-today');
-  if (!view.querySelector('#big-time')) return;
-
-  const totalSec = Math.floor(vm.today * 60);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  $('#big-time').innerHTML = run ? `${h}:${pad(m)}<small>:${pad(s)}</small>` : `${h}:${pad(m)}`;
-
-  let status;
-  if (!run) status = `<span class="dot"></span>Nicht eingestempelt`;
-  else if (onBreak) status = `<span class="dot pause"></span>Pause seit ${hm(new Date(run.breakStart))}`;
-  else status = `<span class="dot on"></span>Eingestempelt seit ${hm(new Date(run.start))}`;
-  $('#status').innerHTML = status;
-
-  $('#st-week').textContent = fmtDur(vm.week);
-  $('#st-month').textContent = fmtDur(vm.month);
-
-  if (run) {
-    const el = view.querySelector(`[data-dur="${run.id}"]`);
-    if (el) el.textContent = fmtDur(workMin(run, now));
+function periodRange(now = new Date()) {
+  if (view.mode === 'week') {
+    const s = addDays(startOfWeek(now), 7 * view.offset);
+    const e = addDays(s, 6);
+    const title = view.offset === 0 ? 'Diese Woche' : view.offset === -1 ? 'Letzte Woche' : `KW ${isoWeek(s)}`;
+    return { start: s, end: e, title, sub: `${view.offset === 0 || view.offset === -1 ? `KW ${isoWeek(s)} · ` : ''}${rangeText(s, e)}` };
   }
+  const s = new Date(now.getFullYear(), now.getMonth() + view.offset, 1);
+  const e = new Date(s.getFullYear(), s.getMonth() + 1, 0);
+  const sameYear = s.getFullYear() === now.getFullYear();
+  return { start: s, end: e, title: `${MONTHS[s.getMonth()]}${sameYear ? '' : ` ${s.getFullYear()}`}`, sub: view.offset === 0 ? 'Dieser Monat' : `${s.getFullYear()}` };
 }
 
-function entryItem(e, now = new Date(), showDay = false) {
+function clockHTML(now, map) {
+  const run = running();
+  const today = dayTotal(map.get(keyOf(now)), now);
+  let label;
+  let actions;
+  if (!run) {
+    label = `<span class="dot"></span>Heute gearbeitet`;
+    actions = `<button class="pill go" data-act="in">Einstempeln</button>`;
+  } else {
+    const rs = new Date(run.start);
+    const since = keyOf(rs) === keyOf(now) ? hm(rs) : `${WD[rs.getDay()]}. ${hm(rs)}`;
+    label = run.breakStart
+      ? `<span class="dot pause"></span>Pause seit ${hm(new Date(run.breakStart))}`
+      : `<span class="dot on"></span>Läuft seit ${since}`;
+    actions = `
+      <button class="pill pause" data-act="break">${run.breakStart ? 'Weiter' : 'Pause'}</button>
+      <button class="pill stop" data-act="out">Stopp</button>`;
+  }
+  return `
+    <section class="clock">
+      <div class="clock-info">
+        <div class="clock-label">${label}</div>
+        <div class="clock-time num" id="clock-time">${clockTimeHTML(today, !!run)}</div>
+      </div>
+      <div class="clock-actions">${actions}</div>
+    </section>`;
+}
+
+function clockTimeHTML(min, live) {
+  if (!live) return durHTML(min);
+  const sec = Math.floor(min * 60);
+  return `${Math.floor(sec / 3600)}:${pad(Math.floor((sec % 3600) / 60))}<small>:${pad(sec % 60)}</small>`;
+}
+
+function entryHTML(e, now) {
   const s = new Date(e.start);
-  const nextDay = e.end && keyOf(new Date(e.end)) !== keyOf(s) ? ' <span class="muted">(+1)</span>' : '';
+  const end = e.end ? new Date(e.end) : null;
+  const nextDay = end && keyOf(end) !== keyOf(s) ? ' <small class="muted">(+1 Tag)</small>' : '';
   const pause = Math.round(pauseOf(e, now));
-  const sub = [
-    showDay ? `${WD[s.getDay()]}, ${fmtShort(s)}` : '',
+  const meta = [
     pause ? `Pause ${pause} Min.` : '',
     e.breakStart ? 'gerade in Pause' : '',
     e.note ? esc(e.note) : '',
   ].filter(Boolean).join(' · ');
   return `
-    <button class="item" data-edit="${e.id}">
-      <div class="main">
-        <div class="title num">${hm(s)} – ${e.end ? hm(new Date(e.end)) + nextDay : '<span class="badge live">läuft</span>'}</div>
-        ${sub ? `<div class="sub">${sub}</div>` : ''}
-      </div>
-      <div class="right num" data-dur="${e.id}">${fmtDur(workMin(e, now))}</div>
-      <span class="chev">›</span>
+    <button class="entry" data-edit="${e.id}">
+      <span class="range num">${hm(s)} – ${end ? hm(end) + nextDay : 'jetzt<span class="live">läuft</span>'}</span>
+      ${meta ? `<span class="meta">${meta}</span>` : ''}
     </button>`;
 }
 
-// ---------- Ansicht: Verlauf ----------
-const hist = { mode: 'week', offset: 0 };
-
-function histRange() {
-  const now = new Date();
-  if (hist.mode === 'week') {
-    const s = addDays(startOfWeek(now), 7 * hist.offset);
-    const e = addDays(s, 6);
-    return { start: s, end: e, label: `KW ${isoWeek(s)}`, sub: `${fmtShort(s)} – ${fmtShort(e)}${e.getFullYear()}` };
-  }
-  const s = new Date(now.getFullYear(), now.getMonth() + hist.offset, 1);
-  const e = new Date(s.getFullYear(), s.getMonth() + 1, 0);
-  return { start: s, end: e, label: `${MONTHS[s.getMonth()]} ${s.getFullYear()}`, sub: `${fmtShort(s)} – ${fmtShort(e)}` };
-}
-
-function renderHistory() {
-  const now = new Date();
-  const today = keyOf(now);
-  const map = byDay();
-  const r = histRange();
-  const { sum, days } = rangeTotal(map, r.start, r.end, now);
-  const rows = [];
-
-  for (let d = new Date(r.start); d <= r.end; d = addDays(d, 1)) {
-    const k = keyOf(d);
-    const list = map.get(k) || [];
-    // Monatsansicht: nur Tage mit Einträgen, Wochenansicht: alle 7 Tage
-    if (hist.mode === 'month' && !list.length) continue;
-    const spans = list.map((e) => `${hm(new Date(e.start))}–${e.end ? hm(new Date(e.end)) : 'läuft'}`).join(', ');
-    const total = dayTotal(list, now);
-    rows.push(`
-      <button class="item ${k > today ? 'dim' : ''} ${k === today ? 'today' : ''}" data-day="${k}">
-        <div class="main">
-          <div class="title">${WD[d.getDay()]} ${fmtShort(d)}</div>
-          <div class="sub num">${spans || 'keine Einträge'}</div>
-        </div>
-        <div class="right num title">${list.length ? fmtDur(total) : '–'}</div>
-        <span class="chev">›</span>
-      </button>`);
-  }
-
-  $('#view-history').innerHTML = `
-    <h1>Verlauf</h1>
-    <p class="subtitle">Tippe einen Tag an, um ihn zu bearbeiten.</p>
-    <div class="segmented" role="tablist">
-      <button class="${hist.mode === 'week' ? 'on' : ''}" data-mode="week">Woche</button>
-      <button class="${hist.mode === 'month' ? 'on' : ''}" data-mode="month">Monat</button>
-    </div>
-    <div class="pager">
-      <button data-page="-1" aria-label="Zurück">‹</button>
-      <div class="label"><b>${r.label}</b><span>${r.sub}</span></div>
-      <button data-page="1" aria-label="Weiter">›</button>
-    </div>
-    <div class="summary">
-      <div class="stat"><div class="label">Gesamt</div><div class="value num">${fmtDur(sum)} Std.</div><div class="note">= ${fmtDec(sum)} Std. dezimal</div></div>
-      <div class="stat"><div class="label">Arbeitstage</div><div class="value num">${days}</div><div class="note">${days ? `Ø ${fmtDur(sum / days)} pro Tag` : '&nbsp;'}</div></div>
-    </div>
-    <div class="group">${rows.join('') || '<div class="empty">Keine Einträge in diesem Monat</div>'}</div>
-    ${hist.mode === 'month' ? `<div style="margin-top:10px"><button class="btn plain full" data-act="add-any">+ Eintrag hinzufügen</button></div>` : ''}
-    ${hist.offset !== 0 ? `<div style="margin-top:10px"><button class="btn plain full" data-page="0">Zurück zu heute</button></div>` : ''}
-  `;
-}
-
-// ---------- Ansicht: Einstellungen ----------
-function renderSettings() {
-  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  const lb = state.settings.lastBackup ? new Date(state.settings.lastBackup) : null;
-
-  $('#view-settings').innerHTML = `
-    <h1>Einstellungen</h1>
-    <p class="subtitle">Export und Datensicherung</p>
-
-    ${standalone ? '' : `
-    <h3 class="section">Als App installieren</h3>
-    <div class="group"><div class="item"><div class="main">
-      <div class="title">Zum Home-Bildschirm hinzufügen</div>
-      <div class="sub" style="white-space:normal">In Safari unten auf <b>Teilen</b> (Quadrat mit Pfeil) tippen, dann <b>„Zum Home-Bildschirm“</b>. Danach die App immer über das Icon öffnen.</div>
-    </div></div></div>`}
-
-    <h3 class="section">Daten</h3>
-    <div class="stack">
-      <button class="btn plain full" data-act="csv">Als CSV exportieren (Excel)</button>
-      <button class="btn plain full" data-act="backup">Backup sichern</button>
-      <button class="btn plain full" data-act="restore">Backup laden</button>
-    </div>
-    <p class="hint">${lb ? `Letztes Backup: ${fmtDate(lb)}.` : 'Noch kein Backup erstellt.'} Die Daten liegen nur auf diesem Gerät. Sichere das Backup z. B. in „Dateien“ → iCloud Drive.</p>
-
-    <h3 class="section">Gefahrenzone</h3>
-    <button class="btn danger-text full" data-act="wipe">Alle Daten löschen</button>
-
-    <p class="about">${state.entries.length} Einträge gespeichert · Arbeitszeit 1.1</p>
-  `;
-}
-
-// ---------- Dialog: Tag ----------
-let openDayKey = null;
-
-function openDay(k) {
-  openDayKey = k;
-  renderDay();
-  const dlg = $('#day-dialog');
-  if (!dlg.open) dlg.showModal();
-}
-
-function renderDay() {
-  const k = openDayKey;
-  if (!k) return;
+function dayHTML(k, list, now, todayKey) {
   const d = fromKey(k);
+  const empty = !list || !list.length;
+  const future = k > todayKey;
+  return `
+    <div class="day ${k === todayKey ? 'is-today' : ''}">
+      <div class="day-date"><span class="dow">${WD[d.getDay()]}</span><span class="dom">${d.getDate()}</span></div>
+      <div class="day-entries">
+        ${empty
+          ? `<button class="entry add ${future ? 'future' : ''}" data-add="${k}">+ Eintragen</button>`
+          : list.map((e) => entryHTML(e, now)).join('')}
+      </div>
+      ${empty ? '' : `<div class="day-total num">${durHTML(dayTotal(list, now))}</div>`}
+    </div>`;
+}
+
+function render() {
   const now = new Date();
-  const list = byDay().get(k) || [];
-  $('#day-title').textContent = `${WD_LONG[d.getDay()]}, ${fmtDate(d)}`;
-  $('#day-body').innerHTML = `
-    <div class="group">${list.map((e) => entryItem(e, now)).join('') || '<div class="empty">Keine Einträge</div>'}</div>
-    <button class="btn plain full" data-act="add-day" style="margin-bottom:14px">+ Eintrag hinzufügen</button>
-    ${list.length ? `<div class="group"><div class="item"><div class="main"><b>Gesamt</b></div><div class="num"><b>${fmtDur(dayTotal(list, now))} Std.</b></div></div></div>` : ''}
+  const todayKey = keyOf(now);
+  renderedDay = todayKey;
+  const map = byDay();
+  const r = periodRange(now);
+  const { sum, days } = rangeTotal(map, r.start, r.end, now);
+
+  let list = '';
+  if (view.mode === 'week') {
+    // Mo–Fr immer zeigen, Wochenende nur mit Einträgen
+    let rows = '';
+    for (let d = new Date(r.start); d <= r.end; d = addDays(d, 1)) {
+      const k = keyOf(d);
+      const entries = map.get(k);
+      const weekend = d.getDay() === 0 || d.getDay() === 6;
+      if (weekend && !entries) continue;
+      rows += dayHTML(k, entries, now, todayKey);
+    }
+    list = `<div class="days">${rows}</div>`;
+  } else {
+    // Monat: nur Tage mit Einträgen, nach Wochen gruppiert mit Wochensumme
+    let d = startOfWeek(r.start);
+    while (d <= r.end) {
+      const ws = d;
+      const we = addDays(ws, 6);
+      let rows = '';
+      let wsum = 0;
+      for (let x = new Date(ws); x <= we; x = addDays(x, 1)) {
+        if (x < r.start || x > r.end) continue;
+        const entries = map.get(keyOf(x));
+        if (!entries) continue;
+        wsum += dayTotal(entries, now);
+        rows += dayHTML(keyOf(x), entries, now, todayKey);
+      }
+      if (rows) {
+        const a = ws < r.start ? r.start : ws;
+        const b = we > r.end ? r.end : we;
+        list += `<div class="week-head"><span>KW ${isoWeek(ws)} · ${a.getDate()}.–${b.getDate()}.</span><b class="num">${fmtDur(wsum)} h</b></div><div class="days" style="margin-top:0">${rows}</div>`;
+      }
+      d = addDays(d, 7);
+    }
+    if (!list) list = `<div class="empty">Keine Einträge in diesem Monat.<br>Tippe auf <b>+</b>, um einen hinzuzufügen.</div>`;
+  }
+
+  const needsBackup = state.entries.length >= 10 &&
+    (!state.settings.lastBackup || (now - new Date(state.settings.lastBackup)) / 86400000 > 30);
+
+  $('#app').innerHTML = `
+    ${clockHTML(now, map)}
+
+    <div class="segmented" role="tablist">
+      <button class="${view.mode === 'week' ? 'on' : ''}" data-mode="week">Woche</button>
+      <button class="${view.mode === 'month' ? 'on' : ''}" data-mode="month">Monat</button>
+    </div>
+
+    <section class="total">
+      <button class="nav" data-page="-1" aria-label="Zurück">‹</button>
+      <div>
+        <div class="total-period">${r.title}</div>
+        <div class="total-range">${r.sub}</div>
+        <div class="total-value num">${durHTML(sum)}</div>
+        <div class="total-sub">${fmtDec(sum)} Std. · ${days} ${days === 1 ? 'Arbeitstag' : 'Arbeitstage'}</div>
+      </div>
+      <button class="nav" data-page="1" aria-label="Weiter">›</button>
+    </section>
+    ${view.offset !== 0 ? `<button class="today-link" data-page="0">Zurück zu heute</button>` : ''}
+
+    ${needsBackup ? `<div class="banner"><p>Deine Daten liegen nur auf diesem iPhone. Sichere sie ab und zu.</p><button class="btn small" data-act="backup">Backup</button></div>` : ''}
+
+    ${list}
   `;
 }
+
+// Jede Sekunde nur die Uhr aktualisieren, jede Minute alles (wenn eingestempelt)
+let tick = 0;
+setInterval(() => {
+  if (document.hidden) return;
+  const now = new Date();
+  if (keyOf(now) !== renderedDay) return render();
+  const run = running();
+  if (!run) return;
+  tick++;
+  const anyDialog = document.querySelector('dialog[open]');
+  if (tick % 60 === 0 && !anyDialog) return render();
+  const el = $('#clock-time');
+  if (el) el.innerHTML = clockTimeHTML(dayTotal(byDay().get(keyOf(now)), now), true);
+}, 1000);
 
 // ---------- Dialog: Eintrag ----------
 let editing = null; // Eintrag oder null (= neu)
+const PRESETS = [0, 15, 30, 45, 60];
+let pauseSel = 30; // gewählte Pausen-Vorgabe (Chip) oder null, wenn "andere" eingetippt
+
+function setPause(min) {
+  const custom = $('#entry-form').pause;
+  if (PRESETS.includes(min)) { pauseSel = min; custom.value = ''; }
+  else { pauseSel = null; custom.value = min; }
+}
+function getPause() {
+  const custom = $('#entry-form').pause.value;
+  return custom !== '' ? Number(custom) : (pauseSel ?? 0);
+}
 
 function openEntry(id, dateKey) {
   editing = id ? state.entries.find((e) => e.id === id) : null;
@@ -402,52 +380,73 @@ function openEntry(id, dateKey) {
     f.date.value = keyOf(s);
     f.start.value = hm(s);
     f.end.value = editing.end ? hm(new Date(editing.end)) : '';
-    f.pause.value = Math.round(editing.pauseMin || 0);
+    setPause(Math.round(editing.pauseMin || 0));
     f.note.value = editing.note || '';
-    $('#entry-title').textContent = 'Eintrag bearbeiten';
+    $('#entry-title').textContent = 'Bearbeiten';
     $('#entry-delete').hidden = false;
     $('#entry-hint').textContent = editing.end ? '' :
-      `Läuft gerade – Ende leer lassen, um weiter zu stempeln.${editing.breakStart ? ' Die laufende Pause wird automatisch dazugerechnet.' : ''}`;
+      `Läuft gerade. „Bis“ leer lassen, um weiter zu stempeln.${editing.breakStart ? ' Die laufende Pause wird automatisch dazugerechnet.' : ''}`;
   } else {
+    const lt = state.settings.lastTimes;
     f.date.value = dateKey || keyOf(new Date());
-    f.start.value = '08:00';
-    f.end.value = '16:30';
-    f.pause.value = 30;
-    $('#entry-title').textContent = 'Neuer Eintrag';
+    f.start.value = lt.start;
+    f.end.value = lt.end;
+    setPause(lt.pause);
+    $('#entry-title').textContent = 'Eintragen';
     $('#entry-delete').hidden = true;
-    $('#entry-hint').textContent = 'Endet die Schicht nach Mitternacht, wird das Ende automatisch auf den Folgetag gelegt.';
+    $('#entry-hint').textContent = '';
   }
+  updatePreview();
   $('#entry-dialog').showModal();
 }
 
-function saveEntry() {
+// Werte aus dem Formular lesen und prüfen (für Vorschau und Speichern)
+function readForm() {
   const f = $('#entry-form');
-  const err = (msg) => { $('#entry-error').textContent = msg; };
-  const isRunning = editing && !editing.end;
+  const isRunning = !!(editing && !editing.end);
   const now = new Date();
-
-  if (!f.date.value || !f.start.value) return err('Bitte Datum und Beginn angeben.');
+  if (!f.date.value || !f.start.value) return { error: 'Bitte Datum und Beginn angeben.' };
   const start = new Date(`${f.date.value}T${f.start.value}`);
-  if (isNaN(start)) return err('Ungültiges Datum oder Uhrzeit.');
-
+  if (isNaN(start)) return { error: 'Ungültiges Datum oder Uhrzeit.' };
   let end = null;
+  let overnight = false;
   if (f.end.value) {
     end = new Date(`${f.date.value}T${f.end.value}`);
-    if (end <= start) end = addDays(end, 1); // über Mitternacht
+    if (end <= start) { end = addDays(end, 1); overnight = true; }
   } else if (!isRunning) {
-    return err('Bitte ein Ende angeben.');
+    return { error: 'Bitte angeben, bis wann gearbeitet wurde.' };
   }
-  if (!end && start > now) return err('Der Beginn liegt in der Zukunft.');
-
-  const pause = Number(f.pause.value || 0);
-  if (!Number.isFinite(pause) || pause < 0) return err('Ungültige Pause.');
-  const liveBreak = isRunning && editing.breakStart ? Math.max(0, ((end && end < now ? end : now) - new Date(editing.breakStart)) / 60000) : 0;
+  if (!end && start > now) return { error: 'Der Beginn liegt in der Zukunft.' };
+  const pause = getPause();
+  if (!Number.isFinite(pause) || pause < 0) return { error: 'Ungültige Pause.' };
+  const liveBreak = isRunning && editing.breakStart
+    ? Math.max(0, ((end && end < now ? end : now) - new Date(editing.breakStart)) / 60000) : 0;
   const span = ((end || now) - start) / 60000;
-  if (end && pause + liveBreak >= span) return err('Die Pause ist länger als die Arbeitszeit.');
+  if (end && pause + liveBreak >= span) return { error: 'Die Pause ist länger als die Arbeitszeit.' };
+  return { start, end, pause, liveBreak, overnight, work: span - pause - liveBreak, note: f.note.value.trim(), isRunning };
+}
+
+function updatePreview() {
+  const v = readForm();
+  const res = $('#entry-result');
+  const f = $('#entry-form');
+  res.textContent = v.error ? '–' : `${fmtDur(v.work)} h${v.end ? '' : ' (läuft)'}`;
+  if (!editing || editing.end) $('#entry-hint').textContent = v.overnight ? 'Endet nach Mitternacht – wird bis zum Folgetag gerechnet.' : '';
+  const customSet = f.pause.value !== '';
+  document.querySelectorAll('#pause-chips .chip[data-pause]').forEach((c) =>
+    c.classList.toggle('on', !customSet && Number(c.dataset.pause) === pauseSel));
+  f.pause.classList.toggle('on', customSet);
+}
+
+function saveEntry() {
+  const err = (msg) => { $('#entry-error').textContent = msg; };
+  const v = readForm();
+  if (v.error) return err(v.error);
+  const now = new Date();
 
   // Überschneidung mit anderen Einträgen prüfen
-  const sMs = start.getTime();
-  const eMs = (end || now).getTime();
+  const sMs = v.start.getTime();
+  const eMs = (v.end || now).getTime();
   const clash = state.entries.find((o) => {
     if (editing && o.id === editing.id) return false;
     const os = new Date(o.start).getTime();
@@ -456,23 +455,37 @@ function saveEntry() {
   });
   if (clash) {
     const cs = new Date(clash.start);
-    return err(`Überschneidet sich mit ${WD[cs.getDay()]} ${fmtShort(cs)} ${hm(cs)}–${clash.end ? hm(new Date(clash.end)) : 'läuft'}.`);
+    return err(`Überschneidet sich mit ${WD[cs.getDay()]} ${fmtShort(cs)} ${hm(cs)}–${clash.end ? hm(new Date(clash.end)) : 'jetzt'}.`);
   }
 
   const data = {
-    start: start.toISOString(),
-    end: end ? end.toISOString() : null,
-    pauseMin: Math.round(pause + (end ? liveBreak : 0)),
-    breakStart: !end && isRunning ? editing.breakStart : null,
-    note: f.note.value.trim(),
+    start: v.start.toISOString(),
+    end: v.end ? v.end.toISOString() : null,
+    pauseMin: Math.round(v.pause + (v.end ? v.liveBreak : 0)),
+    breakStart: !v.end && v.isRunning ? editing.breakStart : null,
+    note: v.note,
   };
   if (editing) Object.assign(editing, data);
   else state.entries.push({ id: uid(), ...data });
 
+  // Zuletzt verwendete Zeiten als Vorschlag merken
+  if (v.end) {
+    const f = $('#entry-form');
+    state.settings.lastTimes = { start: f.start.value, end: f.end.value, pause: Math.round(v.pause) };
+  }
+
   save();
   $('#entry-dialog').close();
   toast('Gespeichert');
-  refresh();
+  // Ansicht auf den Zeitraum des Eintrags springen lassen, damit man ihn sieht
+  jumpTo(v.start);
+}
+
+function jumpTo(date) {
+  const now = new Date();
+  if (view.mode === 'week') view.offset = Math.round((startOfWeek(date) - startOfWeek(now)) / (7 * 86400000));
+  else view.offset = (date.getFullYear() - now.getFullYear()) * 12 + date.getMonth() - now.getMonth();
+  render();
 }
 
 function deleteEntry() {
@@ -482,7 +495,39 @@ function deleteEntry() {
   save();
   $('#entry-dialog').close();
   toast('Eintrag gelöscht');
-  refresh();
+  render();
+}
+
+// ---------- Dialog: Einstellungen ----------
+function openSettings() {
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const lb = state.settings.lastBackup ? new Date(state.settings.lastBackup) : null;
+  $('#settings-body').innerHTML = `
+    ${standalone ? '' : `
+      <div class="info">
+        <b>Als App auf den Home-Bildschirm</b>
+        <p>In Safari unten auf <b style="display:inline">Teilen</b> tippen, dann „Zum Home-Bildschirm“. Danach immer über das Icon öffnen.</p>
+      </div>`}
+
+    <div class="section-title">Export</div>
+    <div class="stack">
+      <button class="btn plain full" data-act="csv">Alle Zeiten als Excel-Datei (CSV)</button>
+    </div>
+
+    <div class="section-title">Datensicherung</div>
+    <div class="stack">
+      <button class="btn plain full" data-act="backup">Backup sichern</button>
+      <button class="btn plain full" data-act="restore">Backup laden</button>
+    </div>
+    <p class="hint">${lb ? `Letztes Backup: ${fmtDate(lb)}.` : 'Noch kein Backup erstellt.'} Deine Daten liegen nur auf diesem Gerät – speichere das Backup z. B. in iCloud Drive.</p>
+
+    <div class="section-title">Löschen</div>
+    <button class="btn plain full" style="color:var(--red)" data-act="wipe">Alle Einträge löschen</button>
+
+    <p class="about">${state.entries.length} Einträge · Arbeitszeit 2.0</p>
+  `;
+  const dlg = $('#settings-dialog');
+  if (!dlg.open) dlg.showModal();
 }
 
 // ---------- Export / Backup ----------
@@ -518,7 +563,7 @@ async function exportCSV() {
   const map = byDay();
   const now = new Date();
   const keys = [...map.keys()].sort();
-  if (!keys.length) return toast('Noch keine Daten zum Exportieren');
+  if (!keys.length) return toast('Noch keine Einträge zum Exportieren');
   const rows = [['Datum', 'Wochentag', 'Beginn', 'Ende', 'Pause (Min.)', 'Arbeitszeit (h:mm)', 'Arbeitszeit (Std.)', 'Notiz']];
   for (const k of keys) {
     const d = fromKey(k);
@@ -542,7 +587,8 @@ async function backup() {
     state.settings.lastBackup = now.toISOString();
     save();
     toast('Backup erstellt');
-    refresh();
+    render();
+    if ($('#settings-dialog').open) openSettings();
   }
 }
 
@@ -557,7 +603,8 @@ function restore(file) {
       state = data;
       save();
       toast('Backup geladen');
-      refresh();
+      render();
+      if ($('#settings-dialog').open) openSettings();
     } catch (err) {
       console.error(err);
       alert('Die Datei konnte nicht gelesen werden. Ist es ein Arbeitszeit-Backup (.json)?');
@@ -571,32 +618,12 @@ function wipe() {
   if (!confirm('Bist du sicher? Ohne Backup sind die Daten weg.')) return;
   state = defaults();
   save();
-  toast('Alle Daten gelöscht');
-  refresh();
-}
-
-// ---------- Navigation & Ereignisse ----------
-let currentView = 'today';
-
-function show(view) {
-  currentView = view;
-  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
-  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+  toast('Alle Einträge gelöscht');
   render();
-  window.scrollTo(0, 0);
+  if ($('#settings-dialog').open) openSettings();
 }
 
-function render() {
-  if (currentView === 'today') renderToday();
-  else if (currentView === 'history') renderHistory();
-  else renderSettings();
-}
-
-function refresh() {
-  render();
-  if ($('#day-dialog').open) renderDay();
-}
-
+// ---------- Ereignisse ----------
 let toastTimer;
 function toast(msg) {
   const t = $('#toast');
@@ -609,28 +636,25 @@ function toast(msg) {
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('button');
   if (!el) return;
-  if (el.dataset.view) return show(el.dataset.view);
   if (el.dataset.edit) return openEntry(el.dataset.edit);
-  if (el.dataset.day) return openDay(el.dataset.day);
-  if (el.dataset.mode) { hist.mode = el.dataset.mode; hist.offset = 0; return renderHistory(); }
+  if (el.dataset.add) return openEntry(null, el.dataset.add);
+  if (el.dataset.mode) { view.mode = el.dataset.mode; view.offset = 0; return render(); }
   if (el.dataset.page !== undefined) {
     const p = Number(el.dataset.page);
-    hist.offset = p === 0 ? 0 : hist.offset + p;
-    return renderHistory();
+    view.offset = p === 0 ? 0 : view.offset + p;
+    return render();
+  }
+  if (el.dataset.pause !== undefined) {
+    setPause(Number(el.dataset.pause));
+    return updatePreview();
   }
   if (el.hasAttribute('data-close')) return el.closest('dialog').close();
   switch (el.dataset.act) {
     case 'in': return clockIn();
     case 'break': return toggleBreak();
     case 'out': return clockOut();
-    case 'add-today': return openEntry(null, keyOf(new Date()));
-    case 'add-day': return openEntry(null, openDayKey);
-    case 'add-any': {
-      // Im aktuell angezeigten Monat: heute, falls enthalten, sonst der 1.
-      const r = histRange();
-      const now = new Date();
-      return openEntry(null, keyOf(now >= r.start && now <= addDays(r.end, 1) ? now : r.start));
-    }
+    case 'add': return openEntry(null, keyOf(new Date()));
+    case 'settings': return openSettings();
     case 'csv': return exportCSV();
     case 'backup': return backup();
     case 'restore': return $('#import-file').click();
@@ -642,9 +666,10 @@ document.addEventListener('click', (ev) => {
 document.querySelectorAll('dialog').forEach((dlg) => {
   dlg.addEventListener('click', (ev) => { if (ev.target === dlg) dlg.close(); });
 });
-$('#day-dialog').addEventListener('close', () => { openDayKey = null; });
 
-$('#entry-form').addEventListener('submit', (ev) => { ev.preventDefault(); saveEntry(); });
+const form = $('#entry-form');
+form.addEventListener('submit', (ev) => { ev.preventDefault(); saveEntry(); });
+form.addEventListener('input', () => { $('#entry-error').textContent = ''; updatePreview(); });
 $('#entry-delete').addEventListener('click', deleteEntry);
 
 $('#import-file').addEventListener('change', (ev) => {
@@ -653,20 +678,12 @@ $('#import-file').addEventListener('change', (ev) => {
   ev.target.value = '';
 });
 
-// Live-Aktualisierung jede Sekunde (nur Zahlen, kein Neuaufbau)
-setInterval(() => {
-  if (document.hidden || currentView !== 'today') return;
-  const now = new Date();
-  if (keyOf(now) !== renderedDay) return renderToday();
-  if (running()) fillToday(todayVM(now));
-}, 1000);
-
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-window.addEventListener('storage', (ev) => { if (ev.key === KEY) { state = load(); refresh(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+window.addEventListener('storage', (ev) => { if (ev.key === KEY) { state = load(); render(); } });
 
 // Start
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e)));
 }
-show('today');
+render();

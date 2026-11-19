@@ -1,6 +1,6 @@
 // Service Worker: macht die App offline nutzbar.
 // Strategie: Netzwerk zuerst (immer neueste Version), bei fehlendem Netz aus dem Cache.
-const CACHE = 'arbeitszeit-v2';
+const CACHE = 'arbeitszeit-v3';
 const ASSETS = [
   './',
   './index.html',

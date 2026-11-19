@@ -17,59 +17,73 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main id="app">
-    <section id="view-today" class="view active" aria-label="Heute"></section>
-    <section id="view-history" class="view" aria-label="Verlauf"></section>
-    <section id="view-settings" class="view" aria-label="Einstellungen"></section>
-  </main>
+  <header class="topbar">
+    <h1>Arbeitszeit</h1>
+    <button class="icon-btn" data-act="settings" aria-label="Einstellungen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
 
-  <nav class="tabbar" aria-label="Navigation">
-    <button class="tab active" data-view="today">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-      <span>Heute</span>
-    </button>
-    <button class="tab" data-view="history">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
-      <span>Verlauf</span>
-    </button>
-    <button class="tab" data-view="settings">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-      <span>Einstellungen</span>
-    </button>
-  </nav>
+  <main id="app"></main>
 
-  <!-- Eintrag bearbeiten -->
+  <button class="fab" data-act="add" aria-label="Arbeitszeit eintragen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+
+  <!-- Eintrag anlegen / bearbeiten -->
   <dialog id="entry-dialog">
-    <form id="entry-form" method="dialog">
+    <form id="entry-form" novalidate>
       <header class="sheet-head">
         <button type="button" class="link" data-close>Abbrechen</button>
         <h2 id="entry-title">Eintrag</h2>
-        <button type="submit" class="link strong" value="save">Sichern</button>
+        <span></span>
       </header>
+
       <div class="group">
         <label class="row"><span>Datum</span><input type="date" name="date" required></label>
-        <label class="row"><span>Beginn</span><input type="time" name="start" required></label>
-        <label class="row"><span>Ende</span><input type="time" name="end"></label>
-        <label class="row"><span>Pause (Min.)</span><input type="number" name="pause" min="0" step="1" inputmode="numeric"></label>
       </div>
+
+      <div class="times">
+        <label class="time-box"><span>Von</span><input type="time" name="start" required></label>
+        <span class="times-arrow" aria-hidden="true">→</span>
+        <label class="time-box"><span>Bis</span><input type="time" name="end"></label>
+      </div>
+
+      <div class="field-label">Pause in Minuten</div>
+      <div class="chips" id="pause-chips">
+        <button type="button" class="chip" data-pause="0">0</button>
+        <button type="button" class="chip" data-pause="15">15</button>
+        <button type="button" class="chip" data-pause="30">30</button>
+        <button type="button" class="chip" data-pause="45">45</button>
+        <button type="button" class="chip" data-pause="60">60</button>
+        <input type="number" class="chip chip-input" name="pause" min="0" max="999" step="1" inputmode="numeric" placeholder="andere" aria-label="Andere Pause in Minuten">
+      </div>
+
       <div class="group">
         <label class="row"><span>Notiz</span><input type="text" class="wide" name="note" maxlength="200" placeholder="optional"></label>
       </div>
+
+      <div class="result">
+        <span>Arbeitszeit</span>
+        <b class="num" id="entry-result">–</b>
+      </div>
       <p class="hint" id="entry-hint"></p>
       <p class="error" id="entry-error" role="alert"></p>
+
+      <button type="submit" class="btn primary full">Speichern</button>
       <button type="button" class="btn danger-text full" id="entry-delete">Eintrag löschen</button>
     </form>
   </dialog>
 
-  <!-- Tag anzeigen -->
-  <dialog id="day-dialog">
+  <!-- Einstellungen -->
+  <dialog id="settings-dialog">
     <div class="sheet">
       <header class="sheet-head">
         <span></span>
-        <h2 id="day-title">Tag</h2>
+        <h2>Einstellungen</h2>
         <button type="button" class="link strong" data-close>Fertig</button>
       </header>
-      <div id="day-body"></div>
+      <div id="settings-body"></div>
     </div>
   </dialog>
 
