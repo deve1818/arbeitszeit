@@ -255,7 +255,7 @@ function dayHTML(k, list, now, todayKey) {
   const empty = !list || !list.length;
   const future = k > todayKey;
   return `
-    <div class="day ${k === todayKey ? 'is-today' : ''}">
+    <div class="day ${k === todayKey ? 'is-today' : ''} ${d.getDay() % 6 === 0 ? 'is-weekend' : ''}">
       <div class="day-date"><span class="dow">${WD[d.getDay()]}</span><span class="dom">${d.getDate()}</span></div>
       <div class="day-entries">
         ${empty
@@ -276,14 +276,11 @@ function render() {
 
   let list = '';
   if (view.mode === 'week') {
-    // Mo–Fr immer zeigen, Wochenende nur mit Einträgen
+    // Alle 7 Tage zeigen (Mo–So), damit auch Wochenendarbeit direkt eintragbar ist
     let rows = '';
     for (let d = new Date(r.start); d <= r.end; d = addDays(d, 1)) {
       const k = keyOf(d);
-      const entries = map.get(k);
-      const weekend = d.getDay() === 0 || d.getDay() === 6;
-      if (weekend && !entries) continue;
-      rows += dayHTML(k, entries, now, todayKey);
+      rows += dayHTML(k, map.get(k), now, todayKey);
     }
     list = `<div class="days">${rows}</div>`;
   } else {
@@ -524,7 +521,7 @@ function openSettings() {
     <div class="section-title">Löschen</div>
     <button class="btn plain full" style="color:var(--red)" data-act="wipe">Alle Einträge löschen</button>
 
-    <p class="about">${state.entries.length} Einträge · Arbeitszeit 2.0</p>
+    <p class="about">${state.entries.length} Einträge · Arbeitszeit 2.1</p>
   `;
   const dlg = $('#settings-dialog');
   if (!dlg.open) dlg.showModal();
